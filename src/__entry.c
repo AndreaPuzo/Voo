@@ -152,9 +152,9 @@ int main (int argc, char ** argv)
       "  -c , --cks <num> --- Set the clock limit.\n"
       "  -d , --dump      --- Turn on all the dump options.\n"
       "       --dump=state|code|data|stack\n"
-      "  -i               --- halt if the IRQ is raised.\n"
-      "  -I               --- force the raise of IRQ.\n"
-      "  -s , --save      --- save the state onto `.voodmp`\n"
+      "  -i               --- Halt if the IRQ is raised.\n"
+      "  -I               --- Force the raise of IRQ.\n"
+      "  -s , --save      --- Save the state onto `.voodmp`\n"
 #endif
       , argv[0] , argv[0]
     ) ;
