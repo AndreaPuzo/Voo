@@ -185,13 +185,13 @@ int main (int argc, char ** argv)
       fprintf(
         stderr ,
         "You can found the documentation here:\n"
-        "  https://github.com/Andpuv/voo/Docs.md\n"
+        "  https://github.com/AndreaPuzo/Voo/blob/main/Docs.md\n"
       ) ;
     } else if (0 == strcmp(argv[1] + 7, "repo")) {
       fprintf(
         stderr ,
         "You can found the repository here:\n"
-        "  https://github.com/Andpuv/voo\n"
+        "  https://github.com/AndreaPuzo/Voo\n"
       ) ;
     } else {
       fprintf(stderr, "error: invalid option `%s`\n", argv[1]) ;
