@@ -374,7 +374,7 @@ u32_t voo_boot (
     ((u32_t)fgetc(fp) <<  0)
   ;
 
-  if (endian != 0x00010203 && endian != 0x03020100) {
+  if (__VOO_ENDIAN != endian) {
     fprintf(stderr, "error: invalid endian\n") ;
     fclose(fp) ;
     return VOO_IRQ_RESERVED_1 ;
@@ -388,13 +388,13 @@ u32_t voo_boot (
     return VOO_IRQ_RESERVED_1 ;
   }
 
-  if (__VOO_ENDIAN != endian)
+  if (__VOO_HOST_ENDIAN != endian)
     secs = voo_bswap_32(secs) ;
 
   for (u32_t i = 0 ; i < secs ; ++i) {
     u64_t addr ;
     u64_t size ;
-    u32_t type ;
+    int type ;
 
     if (1 != fread(&addr, sizeof(addr), 1, fp)) {
       fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
@@ -410,17 +410,11 @@ u32_t voo_boot (
       return VOO_IRQ_RESERVED_1 ;
     }
 
-    if (1 != fread(&type, sizeof(type), 1, fp)) {
-      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-      fprintf(stderr, "  error: cannot read the type\n") ;
-      fclose(fp) ;
-      return VOO_IRQ_RESERVED_1 ;
-    }
+    type = fgetc(fp) ;
 
-    if (__VOO_ENDIAN != endian) {
+    if (__VOO_HOST_ENDIAN != endian) {
       addr = voo_bswap_64(addr) ;
       size = voo_bswap_64(size) ;
-      type = voo_bswap_32(type) ;
     }
 
     if (0 == size) {
@@ -432,15 +426,94 @@ u32_t voo_boot (
 
     if (voo->mem.size < addr + size) {
       fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-      fprintf(
-        stderr                                                       ,
-        "  error: out of memory: the max address is 0x%" PRIX64 "\n"
-        "  note: the max memory address is at 0x%" PRIX64 "\n"       ,
-        addr + size - 1                                              ,
-        voo->mem.size - 1
-      ) ;
+      fprintf(stderr, "  error: out of memory\n") ;
       fclose(fp) ;
       return VOO_IRQ_RESERVED_1 ;
+    }
+
+    switch (type) {
+    case 0x00 :   // 1-aligned
+    case 0x01 :   // 2-aligned
+    case 0x02 :   // 4-aligned
+    case 0x03 : { // 8-aligned
+      size <<= type ;
+    } break ;
+
+    case 0x10 : { // struct-aligned
+      int n = fgetc(fp) ;
+
+      if (0 == n || EOF == n) {
+        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+        fprintf(stderr, "  error: the structure has no fields\n") ;
+        fclose(fp) ;
+        return VOO_IRQ_RESERVED_1 ;
+      }
+
+      int * v = (int *)malloc(n * sizeof(int)) ;
+
+      if (NULL == v) {
+        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+        fprintf(stderr, "  error: cannot allocate the structure\n") ;
+        fclose(fp) ;
+        return VOO_IRQ_RESERVED_1 ;
+      }
+
+      for (int j = 0 ; j < n ; ++j)
+        v[j] = fgetc(fp) ;
+      
+      u64_t struct_size = 0 ;
+
+      for (int j = 0 ; j < n ; ++j) {
+        switch (v[j]) {
+        case 0x00 :   // 1-aligned
+        case 0x01 :   // 2-aligned
+        case 0x02 :   // 4-aligned
+        case 0x03 : { // 8-aligned
+          if (0 != struct_size)
+            struct_size <<= v[j] ;
+          else
+            struct_size = 1 << v[j] ;
+        } break ;
+        
+        case 0x10 :   // array 1-aligned
+        case 0x11 :   // array 2-aligned
+        case 0x12 :   // array 4-aligned
+        case 0x13 : { // array 8-aligned
+          u64_t arrary_n ;
+
+          if (1 != fread(&arrary_n, sizeof(arrary_n), 1, fp)) {
+            fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+            fprintf(stderr, "  error: cannot read the number of array elements\n") ;
+            fclose(fp) ;
+            return VOO_IRQ_RESERVED_1 ;
+          }
+
+          if (__VOO_HOST_ENDIAN != endian)
+            arrary_n = voo_bswap_64(arrary_n) ;
+
+          struct_size += arrary_n << (v[j] - 0x10) ;
+        } break ;
+
+        default : {
+          fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+          fprintf(stderr, "  error: invalid array type 0x%" PRIX32 "\n", v[j]) ;
+          fclose(fp) ;
+          return VOO_IRQ_RESERVED_1 ;
+        }
+        }
+      }
+
+      size *= struct_size ;
+
+      free(v) ;
+    } break ;
+
+    default : {
+      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+      fprintf(stderr, "  error: invalid type 0x%" PRIX32 "\n", type) ;
+      fclose(fp) ;
+      return VOO_IRQ_RESERVED_1 ;
+    }
     }
 
     if (size != fread(voo->mem.data + addr, sizeof(u8_t), size, fp)) {
@@ -448,76 +521,6 @@ u32_t voo_boot (
       fprintf(stderr, "  error: cannot read data from the section\n") ;
       fclose(fp) ;
       return VOO_IRQ_RESERVED_1 ;
-    }
-
-    switch (type) {
-    case 0x00 :   // 1-aligned (or unaligned)
-      break ;
-
-    case 0x01 :   // 2-aligned
-    case 0x02 :   // 4-aligned
-    case 0x03 : { // 8-aligned
-      if (size < (1 << type) || 0 != (size & ((1 << type) - 1))) {
-        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-        fprintf(
-          stderr                                                 ,
-          "  error: invalid size\n"                              ,
-          "  note: the size have to be a power of %" PRIu32 "\n" ,
-          1 << type
-        ) ;
-        fclose(fp) ;
-        return VOO_IRQ_RESERVED_1 ;
-      }
-
-      if (__VOO_ENDIAN != endian) {
-        u8_t * data = voo->mem.data + addr ;
-
-        switch (type) {
-        case 0x01 : {
-          for (u64_t i = 0 ; i < size ; i += 1 << type) {
-            u16_t x ;
-
-            voo_read_16(voo, 0, addr + i, &x) ;
-#if __VOO_ENDIAN == __VOO_HOST_ENDIAN
-            x = voo_bswap_16(x) ;
-#endif
-            voo_write_16(voo, 0, addr + i, x) ;
-          }
-        } break ;
-
-        case 0x02 : {
-          for (u64_t i = 0 ; i < size ; i += 1 << type) {
-            u32_t x ;
-
-            voo_read_32(voo, 0, addr + i, &x) ;
-#if __VOO_ENDIAN == __VOO_HOST_ENDIAN
-            x = voo_bswap_32(x) ;
-#endif
-            voo_write_32(voo, 0, addr + i, x) ;
-          }
-        } break ;
-
-        case 0x03 : {
-          for (u64_t i = 0 ; i < size ; i += 1 << type) {
-            u64_t x ;
-
-            voo_read_64(voo, 0, addr + i, &x) ;
-#if __VOO_ENDIAN == __VOO_HOST_ENDIAN
-            x = voo_bswap_64(x) ;
-#endif
-            voo_write_64(voo, 0, addr + i, x) ;
-          }
-        } break ;
-        }
-      }
-    } break ;
-    
-    default : {
-      fprintf(stderr, "In section %u:\n", i) ;
-      fprintf(stderr, "  error: invalid type 0x" PRIX32 "\n", type) ;
-      fclose(fp) ;
-      return VOO_IRQ_RESERVED_1 ;
-    }
     }
   }
 

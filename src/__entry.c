@@ -127,25 +127,6 @@ int main (int argc, char ** argv)
   opt.mem       = __VOO_MEMORY_SIZE ;
   opt.img       = NULL ;
 
-  if (0 == strcmp(argv[1], "--version")) {
-    fprintf(
-      stderr              ,
-      "Voo %d.%d.%d%s\n"  ,
-      __VOO_VERSION_MAJOR ,
-      __VOO_VERSION_MINOR ,
-      __VOO_VERSION_PATCH ,
-#if __VOO_VERSION_EXTRA == 1
-      "-alpha"
-#elif __VOO_VERSION_EXTRA == 2
-      "-beta"
-#else
-      ""
-#endif
-    ) ;
-
-    exit(EXIT_SUCCESS) ;
-  }
-
   if (0 == strcmp(argv[1], "--help") || 0 == strcmp(argv[1], "-h")) {
     fprintf(
       stderr ,
@@ -161,6 +142,7 @@ int main (int argc, char ** argv)
       "  -h , --help      --- Print this help page.\n"
       "       --help=docs|repo\n"
       "       --version   --- Print the version.\n"
+      "  -e , --endian    --- Print the endian.\n"
       "       --clear-log --- Clear the file `.voolog`.\n"
       "       --clear-dsk --- Clear the file `.voodsk`.\n"
       "       --config    --- Set the default configuration.\n"
@@ -197,6 +179,44 @@ int main (int argc, char ** argv)
       fprintf(stderr, "error: invalid option `%s`\n", argv[1]) ;
       exit(EXIT_FAILURE) ;
     }
+
+    exit(EXIT_SUCCESS) ;
+  }
+
+  if (0 == strcmp(argv[1], "--version")) {
+    fprintf(
+      stderr              ,
+      "Voo %d.%d.%d%s\n"  ,
+      __VOO_VERSION_MAJOR ,
+      __VOO_VERSION_MINOR ,
+      __VOO_VERSION_PATCH ,
+#if __VOO_VERSION_EXTRA == 1
+      "-alpha"
+#elif __VOO_VERSION_EXTRA == 2
+      "-beta"
+#else
+      ""
+#endif
+    ) ;
+
+    exit(EXIT_SUCCESS) ;
+  }
+
+  if (0 == strcmp(argv[1], "--endian") || 0 == strcmp(argv[1], "-e")) {
+    fprintf(
+      stderr ,
+#if __VOO_HOST_ENDIAN == 0x00010203
+      "host: little endian\n"
+#else
+      "host: big endian\n"
+#endif
+
+#if __VOO_ENDIAN == 0x00010203
+      "vm: little endian\n"
+#else
+      "vm: big endian\n"
+#endif
+    ) ;
 
     exit(EXIT_SUCCESS) ;
   }
@@ -307,6 +327,8 @@ int main (int argc, char ** argv)
     }
   }
 
+  fseek(dsk[1], 0, SEEK_SET) ;
+
   voo.ptr = dsk ;
 
   if (0 == opt.doo) {
@@ -323,7 +345,7 @@ int main (int argc, char ** argv)
     }
 
     if (0 != opt.config) {
-      fprintf(fp, "MEM 8 KiB\nIMG sos/sos.iso") ;
+      fprintf(fp, "MEM 8 KiB\nIMG sos/sos.o") ;
       fclose(fp) ;
       exit(EXIT_SUCCESS) ;
     }
