@@ -394,7 +394,6 @@ u32_t voo_boot (
   for (u32_t i = 0 ; i < secs ; ++i) {
     u64_t addr ;
     u64_t size ;
-    int type ;
 
     if (1 != fread(&addr, sizeof(addr), 1, fp)) {
       fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
@@ -409,8 +408,6 @@ u32_t voo_boot (
       fclose(fp) ;
       return VOO_IRQ_RESERVED_1 ;
     }
-
-    type = fgetc(fp) ;
 
     if (__VOO_HOST_ENDIAN != endian) {
       addr = voo_bswap_64(addr) ;
@@ -431,101 +428,119 @@ u32_t voo_boot (
       return VOO_IRQ_RESERVED_1 ;
     }
 
-    switch (type) {
-    case 0x00 :   // 1-aligned
-    case 0x01 :   // 2-aligned
-    case 0x02 :   // 4-aligned
-    case 0x03 : { // 8-aligned
-      size <<= type ;
-    } break ;
-
-    case 0x10 : { // struct-aligned
-      int n = fgetc(fp) ;
-
-      if (0 == n || EOF == n) {
-        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-        fprintf(stderr, "  error: the structure has no fields\n") ;
-        fclose(fp) ;
-        return VOO_IRQ_RESERVED_1 ;
-      }
-
-      int * v = (int *)malloc(n * sizeof(int)) ;
-
-      if (NULL == v) {
-        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-        fprintf(stderr, "  error: cannot allocate the structure\n") ;
-        fclose(fp) ;
-        return VOO_IRQ_RESERVED_1 ;
-      }
-
-      for (int j = 0 ; j < n ; ++j)
-        v[j] = fgetc(fp) ;
-      
-      u64_t struct_size = 0 ;
-
-      for (int j = 0 ; j < n ; ++j) {
-        switch (v[j]) {
-        case 0x00 :   // 1-aligned
-        case 0x01 :   // 2-aligned
-        case 0x02 :   // 4-aligned
-        case 0x03 : { // 8-aligned
-          if (0 != struct_size)
-            struct_size <<= v[j] ;
-          else
-            struct_size = 1 << v[j] ;
-        } break ;
-        
-        case 0x10 :   // array 1-aligned
-        case 0x11 :   // array 2-aligned
-        case 0x12 :   // array 4-aligned
-        case 0x13 : { // array 8-aligned
-          u64_t arrary_n ;
-
-          if (1 != fread(&arrary_n, sizeof(arrary_n), 1, fp)) {
-            fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-            fprintf(stderr, "  error: cannot read the number of array elements\n") ;
-            fclose(fp) ;
-            return VOO_IRQ_RESERVED_1 ;
-          }
-
-          if (__VOO_HOST_ENDIAN != endian)
-            arrary_n = voo_bswap_64(arrary_n) ;
-
-          struct_size += arrary_n << (v[j] - 0x10) ;
-        } break ;
-
-        default : {
-          fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-          fprintf(stderr, "  error: invalid array type 0x%" PRIX32 "\n", v[j]) ;
-          fclose(fp) ;
-          return VOO_IRQ_RESERVED_1 ;
-        }
-        }
-      }
-
-      size *= struct_size ;
-
-      free(v) ;
-    } break ;
-
-    default : {
-      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
-      fprintf(stderr, "  error: invalid type 0x%" PRIX32 "\n", type) ;
-      fclose(fp) ;
-      return VOO_IRQ_RESERVED_1 ;
-    }
-    }
-
     if (size != fread(voo->mem.data + addr, sizeof(u8_t), size, fp)) {
       fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
       fprintf(stderr, "  error: cannot read data from the section\n") ;
       fclose(fp) ;
       return VOO_IRQ_RESERVED_1 ;
     }
+
+    // TODO: bswap section values with HOST_ENDIAN
+
+    u64_t metasize ;
+    u8_t * metadata ;
+    
+    if (1 != fread(&metasize, sizeof(metasize), 1, fp)) {
+      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+      fprintf(stderr, "  error: cannot read the size of metadata\n") ;
+      fclose(fp) ;
+      return VOO_IRQ_RESERVED_1 ;
+    }
+
+    metadata = (u8_t *)malloc(metasize * sizeof(u8_t)) ;
+
+    if (NULL == metadata) {
+      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+      fprintf(stderr, "  error: not enough memory to allocate metadata\n") ;
+      fclose(fp) ;
+      return VOO_IRQ_RESERVED_1 ;
+    }
+
+    if (metasize != fread(metadata, sizeof(u8_t), metasize, fp)) {
+      fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+      fprintf(stderr, "  error: cannot read the content of metadata\n") ;
+      fclose(fp) ;
+      return VOO_IRQ_RESERVED_1 ;
+    }
+
+    if (__VOO_HOST_ENDIAN == endian) {
+      free(metadata) ;
+      continue ;
+    }
+
+    u64_t  len = 0 ;
+    u8_t * buf = voo->mem.data + addr ;
+    
+    for (u64_t j = 0 ; j < metasize ;) {
+      u8_t meta  = metadata[j] ;
+      u8_t type  = (meta >> 0) & 0x3 ;
+      u8_t isarr = (meta >> 2) & 0x1 ;
+      u64_t arrlen = 1, arridx = 0 ;
+
+      if (isarr && metasize < j + sizeof(arrlen)) {
+        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+        fprintf(stderr, "  error: not enough metadata to read the array length\n") ;
+        fclose(fp) ;
+        free(metadata) ;
+        return VOO_IRQ_RESERVED_1 ;
+      }
+      
+      if (isarr) {
+        arrlen = (u64_t *)(metadata + ++j) ;
+        j += sizeof(arrlen) ;
+      }
+
+      if (size < len + (arrlen << type)) {
+        fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+        fprintf(stderr, "  error: not enough data to format it as an array of " PRIu64 " values of type 0x" PRIx8 "\n", arrlen, type) ;
+        fclose(fp) ;
+        free(metadata) ;
+        return VOO_IRQ_RESERVED_1 ;
+      }
+      
+      u8_t * dat = buf + len ;
+      
+      do {
+        switch (type) {
+        case 0x0 : {
+          u8_t * v = (u8_t *)(buf + (arridx << type)) ;
+          *v = voo_bswap_8(*v) ;
+        } break ;
+      
+        case 0x1 : {
+          u16_t * v = (u16_t *)(buf + (arridx << type)) ;
+          *v = voo_bswap_16(*v) ;
+        } break ;
+      
+        case 0x2 : {
+          u32_t * v = (u32_t *)(buf + (arridx << type)) ;
+          *v = voo_bswap_32(*v) ;
+        } break ;
+      
+        case 0x3 : {
+          u64_t * v = (u64_t *)(buf + (arridx << type)) ;
+          *v = voo_bswap_64(*v) ;
+        } break ;
+
+        default : {
+          fprintf(stderr, "In section %" PRIu32 ":\n", i) ;
+          fprintf(stderr, "  error: invalid type 0x" PRIx8 "\n" type) ;
+          fclose(fp) ;
+          free(metadata) ;
+          return VOO_IRQ_RESERVED_1 ;
+        }
+        }
+
+        ++arridx ;
+      } while (arridx < arrlen) ;
+
+      len += arrlen << type ;
+    }
+
+    free(metadata) ;
   }
 
   fclose(fp) ;
-
   return VOO_N_IRQS ;
 }
 
